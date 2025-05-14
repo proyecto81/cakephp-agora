@@ -1,0 +1,25 @@
+{
+    "name": "proyecto81/cakephp-agora",
+    "description": "Agora plugin for CakePHP",
+    "type": "cakephp-plugin",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "cakephp/cakephp": "5.1.*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Agora\\": "src/",
+            "Agora\\Plugin\\": "src/Plugin/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Agora\\Test\\": "tests/",
+            "Cake\\Test\\": "vendor/cakephp/cakephp/tests/"
+        }
+    }
+}
