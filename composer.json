@@ -12,8 +12,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Agora\\": "src/",
-            "Agora\\Plugin\\": "src/Plugin/"
+            "Agora\\": "src/"
         }
     },
     "autoload-dev": {
@@ -21,5 +20,8 @@
             "Agora\\Test\\": "tests/",
             "Cake\\Test\\": "vendor/cakephp/cakephp/tests/"
         }
+    },
+    "extra": {
+        "plugin-name": "Agora"
     }
 }

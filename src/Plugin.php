@@ -1,5 +1,4 @@
 <?php
-
 declare(strict_types=1);
 
 namespace Agora;
@@ -14,7 +13,7 @@ use Cake\Routing\RouteBuilder;
 /**
  * Plugin for Agora
  */
-class AgoraPlugin extends BasePlugin
+class Plugin extends BasePlugin
 {
     /**
      * Load all the plugin configuration and bootstrap logic.
