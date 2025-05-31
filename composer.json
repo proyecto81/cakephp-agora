@@ -1,19 +1,26 @@
 {
-    "name": "proyecto81/agora",
-    "description": "Agora plugin for CakePHP",
+    "name": "proyecto81/cakephp-agora",
+    "description": "Plugin Agora - Sistema backend modular para CakePHP 5",
     "type": "cakephp-plugin",
+    "keywords": ["cakephp", "plugin", "admin", "backend", "agora", "cms"],
+    "homepage": "https://github.com/proyecto81/cakephp-agora",
     "license": "MIT",
+    "authors": [
+        {
+            "name": "Proyecto81",
+            "homepage": "https://github.com/proyecto81"
+        }
+    ],
     "require": {
         "php": ">=8.1",
-        "cakephp/cakephp": "5.1.*"
+        "cakephp/cakephp": "^5.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.1"
     },
     "autoload": {
         "psr-4": {
-            "Agora\\": "src/",
-            "Agora\\Plugin\\": "src/Plugin/"
+            "Agora\\": "src/"
         }
     },
     "autoload-dev": {
@@ -21,5 +28,8 @@
             "Agora\\Test\\": "tests/",
             "Cake\\Test\\": "vendor/cakephp/cakephp/tests/"
         }
+    },
+    "extra": {
+        "installer-name": "Agora"
     }
 }
