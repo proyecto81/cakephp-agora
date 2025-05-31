@@ -1,5 +1,5 @@
 {
-    "name": "proyecto81/cakephp-agora",
+    "name": "proyecto81/agora",
     "description": "Agora plugin for CakePHP",
     "type": "cakephp-plugin",
     "license": "MIT",
@@ -12,7 +12,8 @@
     },
     "autoload": {
         "psr-4": {
-            "Agora\\": "src/"
+            "Agora\\": "src/",
+            "Agora\\Plugin\\": "src/Plugin/"
         }
     },
     "autoload-dev": {
@@ -20,8 +21,5 @@
             "Agora\\Test\\": "tests/",
             "Cake\\Test\\": "vendor/cakephp/cakephp/tests/"
         }
-    },
-    "extra": {
-        "plugin-name": "Agora"
     }
 }
