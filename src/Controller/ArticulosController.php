@@ -42,6 +42,9 @@ class ArticulosController extends AppController
         $this->ArticuloImagenes = $this->fetchTable('ArticuloImagenes');
         $this->ArticuloMultimedias = $this->fetchTable('ArticuloMultimedias');
         $this->ArticuloDocumentos = $this->fetchTable('ArticuloDocumentos');
+
+        // Cargar componente de archivos
+        $this->loadComponent('Agora.Archivos');
     }
 
     public function beforeFilter(EventInterface $event)
@@ -49,7 +52,6 @@ class ArticulosController extends AppController
         parent::beforeFilter($event);
         $this->Authorization->skipAuthorization();
     }
-
 
     /**
      * Index method - Lista todos los artículos
@@ -72,36 +74,7 @@ class ArticulosController extends AppController
 
         $articulos = $this->paginate($query);
 
-        // Variables para la vista
         $this->set(compact('articulos'));
-    }
-
-    // Control de etiquetas de articulos
-    // !(y podria ser utilizado en un componente posteeriormente)
-
-    private function _procesarEtiquetas($data)
-    {
-        if (!empty($data['etiquetas']['_ids'])) {
-            $etiquetas = [];
-            foreach ($data['etiquetas']['_ids'] as $etiquetaId) {
-                if (strpos($etiquetaId, 'new:') === 0) {
-                    // Es una nueva etiqueta
-                    $nuevaEtiqueta = $this->Articulos->Etiquetas->newEntity([
-                        'titulo' => substr($etiquetaId, 4),
-                        'slug' => Text::slug(strtolower(substr($etiquetaId, 4))),
-                        'estado_id' => 1
-                    ]);
-
-                    if ($this->Articulos->Etiquetas->save($nuevaEtiqueta)) {
-                        $etiquetas[] = $nuevaEtiqueta->id;
-                    }
-                } else {
-                    $etiquetas[] = $etiquetaId;
-                }
-            }
-            $data['etiquetas']['_ids'] = $etiquetas;
-        }
-        return $data;
     }
 
     /**
@@ -121,24 +94,9 @@ class ArticulosController extends AppController
             $data['cuenta_id'] = $this->Authentication->getIdentity()->id;
             $data['estado_id'] = 7; // Borrador por defecto
 
-            // Generar slug único si no se proporcionó
-            if (empty($data['slug'])) {
-                $slugBase = Text::slug($data['titulo']);
-                $slugBase = strtolower(substr($slugBase, 0, 191)); // Dejamos espacio para sufijo
+            // Generar slug único
+            $data['slug'] = $this->_generarSlugUnico($data['titulo']);
 
-                // Verificar si ya existe y añadir sufijo si es necesario
-                $slug = $slugBase;
-                $counter = 0;
-
-                while ($this->Articulos->exists(['slug' => $slug])) {
-                    $counter++;
-                    $slug = $slugBase . '-' . $counter;
-                }
-
-                $data['slug'] = $slug;
-            }
-
-            // Ahora hacemos un solo patchEntity con todos los datos
             $articulo = $this->Articulos->patchEntity($articulo, $data, [
                 'associated' => ['Etiquetas', 'ArticuloImagenes', 'ArticuloMultimedias', 'ArticuloDocumentos']
             ]);
@@ -151,23 +109,14 @@ class ArticulosController extends AppController
             $this->Flash->error('No se pudo guardar el artículo. Por favor, intente nuevamente.');
         }
 
+        // Contadores para artículo nuevo (siempre 0)
+        $nro_imagenes = 0;
+        $nro_multimedia = 0;
+        $nro_documentos = 0;
+
         // Datos para los selects
-        $categorias = $this->Categorias->find('treeList')
-            ->where(['estado_id' => 11])
-            ->order(['titulo' => 'ASC'])->all();
-
-        $etiquetas = $this->Etiquetas->find('list')
-            ->where(['estado_id' => 1])
-            ->order(['titulo' => 'ASC']);
-
-        $estados = $this->Articulos->Estados->find('list', ['keyField' => 'id', 'valueField' => 'valor'])
-            ->where(['tipo' => 'articulo'])
-            ->order(['valor' => 'ASC']);
-
-        $tipo_imagenes = $this->ArticuloImagenes->TipoImagenes->find('list')
-            ->order(['valor' => 'ASC']);
-
-        $this->set(compact('articulo', 'categorias', 'etiquetas', 'estados', 'tipo_imagenes'));
+        $this->_cargarDatosFormulario();
+        $this->set(compact('articulo', 'nro_imagenes', 'nro_multimedia', 'nro_documentos'));
     }
 
     /**
@@ -189,30 +138,19 @@ class ArticulosController extends AppController
             ]);
 
             // Contadores
-            $nro_imagenes = $nro_multimedia = $nro_documentos = 0;
-            if (count($articulo->articulo_imagenes) > 0) {
-                $nro_imagenes = count($articulo->articulo_imagenes);
-            }
-
-            if (count($articulo->articulo_multimedias) > 0) {
-                $nro_multimedia = count($articulo->articulo_multimedias);
-            }
-
-            if (count($articulo->articulo_documentos) > 0) {
-                $nro_documentos = count($articulo->articulo_documentos);
-            }
-
-
+            $nro_imagenes = count($articulo->articulo_imagenes);
+            $nro_multimedia = count($articulo->articulo_multimedias);
+            $nro_documentos = count($articulo->articulo_documentos);
 
             if ($this->request->is(['patch', 'post', 'put'])) {
                 $data = $this->request->getData();
 
+                // Procesar etiquetas
                 $data = $this->_procesarEtiquetas($data);
-                $articulo = $this->Articulos->patchEntity($articulo, $data);
 
-                // Actualizar slug si cambió el título
-                if ($articulo->titulo !== $data['titulo']) {
-                    $data['slug'] = Text::slug(strtolower($data['titulo']));
+                // Generar nuevo slug si cambió el título
+                if (!empty($data['titulo']) && $data['titulo'] !== $articulo->titulo) {
+                    $data['slug'] = $this->_generarSlugUnico($data['titulo'], $articulo->id);
                 }
 
                 $articulo = $this->Articulos->patchEntity($articulo, $data, [
@@ -228,23 +166,8 @@ class ArticulosController extends AppController
             }
 
             // Datos para los selects
-            $categorias = $this->Categorias->find('treeList')
-                ->where(['estado_id' => 11])
-                ->order(['titulo' => 'ASC'])->all();
-
-            $etiquetas = $this->Etiquetas->find('list')
-                ->where(['estado_id' => 1])
-                ->order(['titulo' => 'ASC']);
-
-            $estados = $this->Articulos->Estados->find('list', ['keyField' => 'id', 'valueField' => 'valor'])
-                ->where(['tipo' => 'articulo'])
-                ->order(['valor' => 'ASC']);
-
-            $tipo_imagenes = $this->ArticuloImagenes->TipoImagenes->find('list')
-                ->order(['valor' => 'ASC']);
-
-
-            $this->set(compact('articulo', 'categorias', 'etiquetas', 'estados', 'tipo_imagenes', 'nro_imagenes', 'nro_multimedia', 'nro_documentos'));
+            $this->_cargarDatosFormulario();
+            $this->set(compact('articulo', 'nro_imagenes', 'nro_multimedia', 'nro_documentos'));
         } catch (RecordNotFoundException $e) {
             $this->Flash->error('Artículo no encontrado.');
             return $this->redirect(['action' => 'index']);
@@ -279,84 +202,53 @@ class ArticulosController extends AppController
 
     public function agregarImagen($id = null)
     {
-        // 1. Saltar la autorización para evitar restricciones de acceso
-        $this->Authorization->skipAuthorization();
-
-        // 2. Cargar el componente de imágenes
-        if (!isset($this->Imagenes)) {
-            $this->loadComponent('Agora.Imagenes');
-        }
+        $this->request->allowMethod(['post']);
 
         try {
-            // 3. Verificar que el artículo existe
-            if (!$this->Articulos->exists(['id' => $id])) {
-                throw new \Exception('El artículo no existe');
-            }
+            // Verificar que el artículo existe
+            $this->Articulos->get($id);
 
-            // 4. Obtener el archivo subido
             $fileData = $this->request->getData('file');
-
-            if (empty($fileData) || $fileData->getError() !== UPLOAD_ERR_OK) {
-                throw new \Exception('No se recibió ningún archivo o hubo un error en la subida');
+            if (empty($fileData)) {
+                throw new \Exception('No se recibió ningún archivo');
             }
 
-            // 5. Preparar datos para el componente
-            $uploadedFile = [
-                'name' => $fileData->getClientFilename(),
-                'type' => $fileData->getClientMediaType(),
-                'tmp_name' => $fileData->getStream()->getMetadata('uri'),
-                'error' => $fileData->getError(),
-                'size' => $fileData->getSize(),
-            ];
+            // Procesar archivo con el componente
+            $resultado = $this->Archivos->subirArchivo($fileData, (int)$id, 'imagen');
 
-            // 6. Procesar la imagen con el componente
-            $resultado = $this->Imagenes->guardarImagen((int)$id, $uploadedFile, 'articulos');
-
-            if (!empty($resultado['errors'])) {
-                throw new \Exception('Error al procesar la imagen: ' . implode(', ', $resultado['errors']));
-            }
-
-            // 7. Guardar en la base de datos
+            // Guardar en la base de datos
             $imagen = $this->ArticuloImagenes->newEntity([
                 'articulo_id' => $id,
-                'tipo_imagen_id' => 3,  // Por defecto es 3 (galeria)
-                'file_name' => $resultado['nombre_archivo'],
-                'file_path' => '/img/articulos/' . $id . '/media/' . $resultado['nombre_archivo'],
-                'file_size' => $fileData->getSize(),
-                'mime_type' => $fileData->getClientMediaType(),
+                'tipo_imagen_id' => 3,  // Por defecto galería
+                'file_name' => $resultado['nombre_original'],
+                'file_path' => $resultado['ruta_relativa'],
+                'file_size' => $resultado['tamaño'],
+                'mime_type' => $resultado['tipo_mime'],
                 'title_data' => '',
                 'alt_data' => '',
                 'epigrafe' => ''
             ]);
 
             if ($this->ArticuloImagenes->save($imagen)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Imagen agregada correctamente',
-                        'data' => [
-                            'id' => $imagen->id,
-                            'file_path' => $imagen->file_path
-                        ]
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Imagen agregada correctamente', [
+                    'id' => $imagen->id,
+                    'file_path' => $imagen->file_path
+                ]);
             }
 
-            // 8. Limpiar en caso de error
-            $this->Imagenes->eliminarArchivoFoto($id, $resultado['nombre_archivo'], 'articulos');
-
+            // Limpiar archivo si falló la BD
+            $this->Archivos->eliminarArchivo($resultado['ruta_relativa']);
             throw new \Exception('No se pudo guardar la información de la imagen en la base de datos');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Artículo no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function actualizarImagen($id = null)
     {
-        $this->request->allowMethod(['patch']);
+        $this->request->allowMethod(['patch', 'put']);
 
         try {
             $imagen = $this->ArticuloImagenes->get($id);
@@ -365,55 +257,42 @@ class ArticulosController extends AppController
             $imagen = $this->ArticuloImagenes->patchEntity($imagen, $data);
 
             if ($this->ArticuloImagenes->save($imagen)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Imagen actualizada correctamente'
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Imagen actualizada correctamente');
             }
 
             throw new \Exception('No se pudo actualizar la imagen');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Imagen no encontrada');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function eliminarImagen($id = null)
     {
-        $this->request->allowMethod(['ajax', 'delete']);
+        $this->request->allowMethod(['delete', 'ajax']);
 
         try {
             $imagen = $this->ArticuloImagenes->get($id);
 
             if ($this->ArticuloImagenes->delete($imagen)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Imagen eliminada correctamente'
-                    ]));
+                // Eliminar archivo físico
+                $this->Archivos->eliminarArchivo($imagen->file_path);
+
+                return $this->_construirRespuestaJson(true, 'Imagen eliminada correctamente');
             }
 
             throw new \Exception('No se pudo eliminar la imagen');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Imagen no encontrada');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function agregarMultimedia($id = null)
     {
-
-        Log::error('ID: ' . $id);
-
-        // 1. Saltar la autorización para evitar restricciones de acceso
-        $this->Authorization->skipAuthorization();
+        $this->request->allowMethod(['post']);
 
         try {
             $articulo = $this->Articulos->get($id);
@@ -423,166 +302,84 @@ class ArticulosController extends AppController
             $multimedia->articulo_id = $articulo->id;
 
             if ($this->ArticuloMultimedias->save($multimedia)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Contenido multimedia agregado correctamente',
-                        'data' => $multimedia
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Contenido multimedia agregado correctamente', $multimedia);
             }
 
             throw new \Exception('No se pudo guardar el contenido multimedia');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Artículo no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function eliminarMultimedia($id = null)
     {
-        $this->request->allowMethod(['ajax', 'delete']);
+        $this->request->allowMethod(['delete', 'ajax']);
 
         try {
             $multimedia = $this->ArticuloMultimedias->get($id);
 
             if ($this->ArticuloMultimedias->delete($multimedia)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Contenido multimedia eliminado correctamente'
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Contenido multimedia eliminado correctamente');
             }
 
             throw new \Exception('No se pudo eliminar el contenido multimedia');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Contenido multimedia no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
-
     public function agregarDocumento($id = null)
     {
-        $this->Authorization->skipAuthorization();
+        $this->request->allowMethod(['post']);
 
         try {
-            // Convertir el ID a entero
-            $id = (int)$id;
-
-            if (!$this->Articulos->exists(['id' => $id])) {
-                throw new \Exception('El artículo no existe');
-            }
+            // Verificar que el artículo existe
+            $this->Articulos->get($id);
 
             $fileData = $this->request->getData('file');
-
-            if (empty($fileData) || $fileData->getError() !== UPLOAD_ERR_OK) {
-                throw new \Exception('No se recibió ningún archivo o hubo un error en la subida');
+            if (empty($fileData)) {
+                throw new \Exception('No se recibió ningún archivo');
             }
 
-            // Validar tipos de archivo permitidos
-            $allowedTypes = [
-                'application/pdf',
-                'application/msword',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'application/vnd.ms-excel',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'application/vnd.ms-powerpoint',
-                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                'application/zip',
-                'text/plain'
-            ];
-
-            $mimeType = $fileData->getClientMediaType();
-            if (!in_array($mimeType, $allowedTypes)) {
-                throw new \Exception('Tipo de archivo no permitido');
-            }
-
-            // Crear directorio si no existe
-            $uploadPath = WWW_ROOT . 'files' . DS . 'articulos' . DS . $id;
-            if (!file_exists($uploadPath)) {
-                if (!mkdir($uploadPath, 0755, true)) {
-                    throw new \Exception('No se pudo crear el directorio de destino');
-                }
-            }
-
-            // Generar nombre único para el archivo
-            $fileName = $fileData->getClientFilename();
-            $newFileName = time() . '_' . uniqid() . '_' . $fileName;
-            $fullPath = $uploadPath . DS . $newFileName;
-
-            // Mover el archivo
-            try {
-                // Obtener el stream del archivo temporal
-                $stream = $fileData->getStream();
-                $tempPath = $stream->getMetadata('uri');
-
-                // Intentar copiar el archivo manualmente
-                if (copy($tempPath, $fullPath)) {
-                    // Éxito - continuar con el código
-                } else {
-                    throw new \Exception('No se pudo copiar el archivo. Error: ' . error_get_last()['message']);
-                }
-            } catch (\Exception $e) {
-                throw new \Exception('Error al mover el archivo: ' . $e->getMessage());
-            }
-
-            // Path relativo para guardar en la BD
-            $filePath = 'files/articulos/' . $id . '/' . $newFileName;
-
-            // Cargar el modelo ArticuloDocumentos si no lo tienes ya
-            if (!isset($this->ArticuloDocumentos)) {
-                $this->ArticuloDocumentos = $this->fetchTable('ArticuloDocumentos');
-            }
+            // Procesar archivo con el componente
+            $resultado = $this->Archivos->subirArchivo($fileData, (int)$id, 'documento');
 
             // Crear la entidad
             $documento = $this->ArticuloDocumentos->newEntity([
                 'articulo_id' => $id,
-                'file_name' => $fileName,
-                'file_path' => $filePath,
-                'file_size' => $fileData->getSize(),
-                'mime_type' => $mimeType,
-                'titulo' => pathinfo($fileName, PATHINFO_FILENAME),
+                'file_name' => $resultado['nombre_original'],
+                'file_path' => $resultado['ruta_relativa'],
+                'file_size' => $resultado['tamaño'],
+                'mime_type' => $resultado['tipo_mime'],
+                'titulo' => pathinfo($resultado['nombre_original'], PATHINFO_FILENAME),
                 'descripcion' => '',
                 'descargas' => 0
             ]);
 
             if ($this->ArticuloDocumentos->save($documento)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Documento agregado correctamente',
-                        'data' => [
-                            'id' => $documento->id,
-                            'file_path' => $documento->file_path
-                        ]
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Documento agregado correctamente', [
+                    'id' => $documento->id,
+                    'file_path' => $documento->file_path
+                ]);
             }
 
-            // Si no se pudo guardar en la BD, eliminar el archivo
-            if (file_exists($fullPath)) {
-                unlink($fullPath);
-            }
-
+            // Limpiar archivo si falló la BD
+            $this->Archivos->eliminarArchivo($resultado['ruta_relativa']);
             throw new \Exception('No se pudo guardar la información del documento en la base de datos');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Artículo no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function actualizarDocumento($id = null)
     {
-        //$this->request->allowMethod(['patch']);
-        $this->Authorization->skipAuthorization();
+        $this->request->allowMethod(['patch', 'put']);
 
         try {
             $documento = $this->ArticuloDocumentos->get($id);
@@ -591,27 +388,19 @@ class ArticulosController extends AppController
             $documento = $this->ArticuloDocumentos->patchEntity($documento, $data);
 
             if ($this->ArticuloDocumentos->save($documento)) {
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Documento actualizado correctamente'
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Documento actualizado correctamente');
             }
 
             throw new \Exception('No se pudo actualizar el documento');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Documento no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function descargarDocumento($id = null)
     {
-        $this->Authorization->skipAuthorization();
-
         try {
             $documento = $this->ArticuloDocumentos->get($id);
             $filePath = WWW_ROOT . str_replace('/', DS, $documento->file_path);
@@ -629,56 +418,39 @@ class ArticulosController extends AppController
                 $filePath,
                 ['download' => true, 'name' => $documento->file_name]
             );
+        } catch (RecordNotFoundException $e) {
+            $this->Flash->error('Documento no encontrado.');
+            return $this->redirect(['action' => 'index']);
         } catch (\Exception $e) {
             $this->Flash->error('Error al descargar el documento: ' . $e->getMessage());
-            return $this->redirect(['action' => 'editar', $documento->articulo_id]);
+            return $this->redirect(['action' => 'index']);
         }
     }
 
     public function eliminarDocumento($id = null)
     {
-        $this->request->allowMethod(['ajax', 'delete']);
-        $this->Authorization->skipAuthorization();
+        $this->request->allowMethod(['delete', 'ajax']);
 
         try {
             $documento = $this->ArticuloDocumentos->get($id);
-            $filePath = WWW_ROOT . str_replace('/', DS, $documento->file_path);
 
             if ($this->ArticuloDocumentos->delete($documento)) {
-                // Eliminar el archivo físico
-                if (file_exists($filePath)) {
-                    unlink($filePath);
-                }
+                // Eliminar archivo físico
+                $this->Archivos->eliminarArchivo($documento->file_path);
 
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'message' => 'Documento eliminado correctamente'
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Documento eliminado correctamente');
             }
 
             throw new \Exception('No se pudo eliminar el documento');
+        } catch (RecordNotFoundException $e) {
+            return $this->_construirRespuestaJson(false, 'Documento no encontrado');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
     }
 
     public function listarRecursosArticulo($id = null, $tipo = 'imagenes')
     {
-
-        //Log::error('ID: ' . $id);
-        //Log::error('TIPO: ' . $tipo);
-
-        $this->Authorization->skipAuthorization();
-
-        /*if (!$this->request->is('ajax')) {
-            throw new \Exception('Acceso no permitido');
-        }*/
-
         try {
             // Obtener la URL base de la aplicación
             $baseUrl = $this->request->getAttributes()['webroot'];
@@ -690,16 +462,13 @@ class ArticulosController extends AppController
                     ->order(['id' => 'DESC'])
                     ->all()
                     ->map(function ($imagen) use ($baseUrl) {
-                        // Convertir la ruta relativa a una URL completa
                         $imagen->file_path = $baseUrl . ltrim($imagen->file_path, '/');
                         return $imagen;
                     });
 
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'imagenes' => $recursos
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Imágenes obtenidas correctamente', [
+                    'imagenes' => $recursos
+                ]);
             } elseif ($tipo === 'documentos') {
                 $recursos = $this->ArticuloDocumentos->find()
                     ->where(['articulo_id' => $id])
@@ -707,25 +476,137 @@ class ArticulosController extends AppController
                     ->order(['id' => 'DESC'])
                     ->all()
                     ->map(function ($documento) use ($baseUrl) {
-                        // Convertir la ruta relativa a una URL completa
                         $documento->file_path = $baseUrl . ltrim($documento->file_path, '/');
                         return $documento;
                     });
 
-                return $this->response->withType('application/json')
-                    ->withStringBody(json_encode([
-                        'success' => true,
-                        'documentos' => $recursos
-                    ]));
+                return $this->_construirRespuestaJson(true, 'Documentos obtenidos correctamente', [
+                    'documentos' => $recursos
+                ]);
             }
 
             throw new \Exception('Tipo de recurso no válido');
         } catch (\Exception $e) {
-            return $this->response->withType('application/json')
-                ->withStringBody(json_encode([
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ]));
+            return $this->_construirRespuestaJson(false, $e->getMessage());
         }
+    }
+
+    /**
+     * Métodos privados
+     */
+
+    /**
+     * Genera un slug único para el artículo
+     *
+     * @param string $titulo Título del artículo
+     * @param int|null $id ID del artículo (para excluir en ediciones)
+     * @return string Slug único generado
+     */
+    private function _generarSlugUnico(string $titulo, ?int $id = null): string
+    {
+        $slugBase = Text::slug(strtolower($titulo));
+        $slugBase = substr($slugBase, 0, 191); // Dejamos espacio para sufijo
+
+        $conditions = ['slug' => $slugBase];
+        if ($id !== null) {
+            $conditions['id !='] = $id;
+        }
+
+        // Si no existe, usar el slug base
+        if (!$this->Articulos->exists($conditions)) {
+            return $slugBase;
+        }
+
+        // Si existe, buscar un sufijo único
+        $counter = 1;
+        do {
+            $slug = $slugBase . '-' . $counter;
+            $conditions['slug'] = $slug;
+            $counter++;
+        } while ($this->Articulos->exists($conditions));
+
+        return $slug;
+    }
+
+    /**
+     * Procesa las etiquetas, creando nuevas si es necesario
+     *
+     * @param array $data Datos del formulario
+     * @return array Datos procesados
+     */
+    private function _procesarEtiquetas(array $data): array
+    {
+        if (!empty($data['etiquetas']['_ids'])) {
+            $etiquetas = [];
+            foreach ($data['etiquetas']['_ids'] as $etiquetaId) {
+                if (strpos($etiquetaId, 'new:') === 0) {
+                    // Es una nueva etiqueta
+                    $tituloEtiqueta = substr($etiquetaId, 4);
+                    $nuevaEtiqueta = $this->Etiquetas->newEntity([
+                        'titulo' => $tituloEtiqueta,
+                        'slug' => Text::slug(strtolower($tituloEtiqueta)),
+                        'estado_id' => 28 // Estado activo para etiquetas
+                    ]);
+
+                    if ($this->Etiquetas->save($nuevaEtiqueta)) {
+                        $etiquetas[] = $nuevaEtiqueta->id;
+                    }
+                } else {
+                    $etiquetas[] = $etiquetaId;
+                }
+            }
+            $data['etiquetas']['_ids'] = $etiquetas;
+        }
+        return $data;
+    }
+
+    /**
+     * Construye una respuesta JSON estandarizada
+     *
+     * @param bool $success Indica si la operación fue exitosa
+     * @param string $message Mensaje descriptivo
+     * @param mixed $data Datos adicionales (opcional)
+     * @param array|null $errors Errores de validación (opcional)
+     * @return \Cake\Http\Response Respuesta JSON
+     */
+    private function _construirRespuestaJson(bool $success, string $message, $data = null, ?array $errors = null): \Cake\Http\Response
+    {
+        $response = [
+            'success' => $success,
+            'message' => $message,
+            'data' => $data,
+        ];
+
+        if ($errors !== null) {
+            $response['errors'] = $errors;
+        }
+
+        return $this->response
+            ->withType('application/json')
+            ->withStringBody(json_encode($response));
+    }
+
+    /**
+     * Carga los datos necesarios para los formularios
+     */
+    private function _cargarDatosFormulario(): void
+    {
+        $categorias = $this->Categorias->find('treeList')
+            ->where(['estado_id' => 11])
+            ->order(['titulo' => 'ASC'])
+            ->all();
+
+        $etiquetas = $this->Etiquetas->find('list')
+            ->where(['estado_id' => 28])
+            ->order(['titulo' => 'ASC']);
+
+        $estados = $this->Articulos->Estados->find('list', keyField: 'id', valueField: 'valor')
+            ->where(['tipo' => 'articulo'])
+            ->order(['valor' => 'ASC']);
+
+        $tipo_imagenes = $this->ArticuloImagenes->TipoImagenes->find('list')
+            ->order(['valor' => 'ASC']);
+
+        $this->set(compact('categorias', 'etiquetas', 'estados', 'tipo_imagenes'));
     }
 }
