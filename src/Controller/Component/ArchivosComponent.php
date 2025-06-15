@@ -9,22 +9,17 @@ use Cake\Http\Exception\BadRequestException;
 use Cake\Utility\Text;
 
 /**
- * Archivos Component
+ * Archivos Component - EXCLUSIVO para archivos no-imagen
  * 
- * Maneja la gestión de archivos (imágenes y documentos) de manera centralizada
+ * Maneja la gestión de documentos y archivos no-imagen de manera centralizada.
+ * Las imágenes DEBEN procesarse con ImagenesComponent.
  */
 class ArchivosComponent extends Component
 {
     /**
-     * Tipos de archivo permitidos por categoría
+     * Tipos de archivo permitidos por categoría - SIN IMÁGENES
      */
     private array $tiposPermitidos = [
-        'imagen' => [
-            'image/jpeg',
-            'image/png',
-            'image/gif',
-            'image/webp'
-        ],
         'documento' => [
             'application/pdf',
             'application/msword',
@@ -33,8 +28,20 @@ class ArchivosComponent extends Component
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'application/vnd.ms-powerpoint',
             'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'application/zip',
             'text/plain'
+        ],
+        'archivo' => [
+            'application/json',
+            'application/xml',
+            'text/csv',
+            'application/zip',
+            'application/rar',
+            'text/plain'
+        ],
+        'geoespacial' => [
+            'application/json', // GeoJSON
+            'text/plain',       // WKT
+            'application/xml'   // KML
         ]
     ];
 
@@ -42,16 +49,18 @@ class ArchivosComponent extends Component
      * Tamaños máximos por tipo (en MB)
      */
     private array $tamañosMaximos = [
-        'imagen' => 5,
-        'documento' => 10
+        'documento' => 10,
+        'archivo' => 10,
+        'geoespacial' => 5
     ];
 
     /**
-     * Estructura de directorios por tipo
+     * Estructura de directorios por tipo - SIN imágenes
      */
     private array $estructuraDirectorios = [
-        'imagen' => 'img/articulos/{id}/media/',
-        'documento' => 'files/articulos/{id}/'
+        'documento' => 'files/articulos/{id}/documentos/',
+        'archivo' => 'files/articulos/{id}/archivos/',
+        'geoespacial' => 'files/articulos/{id}/geo/'
     ];
 
     /**
@@ -59,13 +68,13 @@ class ArchivosComponent extends Component
      *
      * @param object $archivo Archivo subido (PSR-7 UploadedFile)
      * @param int $entidadId ID de la entidad padre
-     * @param string $tipo Tipo de archivo ('imagen' o 'documento')
+     * @param string $tipo Tipo de archivo ('documento', 'archivo', 'geoespacial')
      * @return array Resultado con información del archivo subido
      * @throws \Exception Si hay errores en la subida
      */
     public function subirArchivo($archivo, int $entidadId, string $tipo): array
     {
-        // Validar archivo
+        // Validar archivo (incluye bloqueo de imágenes)
         $this->validarArchivo($archivo, $tipo);
 
         // Generar nombre único
@@ -90,12 +99,14 @@ class ArchivosComponent extends Component
             'ruta_completa' => $rutaCompleta,
             'ruta_relativa' => $rutaRelativa,
             'tamaño' => $archivo->getSize(),
-            'tipo_mime' => $archivo->getClientMediaType()
+            'tipo_mime' => $archivo->getClientMediaType(),
+            'tipo_procesado' => $tipo
         ];
     }
 
     /**
      * Valida un archivo según el tipo especificado
+     * BLOQUEA explícitamente las imágenes
      *
      * @param object $archivo Archivo a validar
      * @param string $tipo Tipo de archivo
@@ -108,16 +119,22 @@ class ArchivosComponent extends Component
             throw new \Exception('Error en la subida del archivo: ' . $this->obtenerMensajeError($archivo->getError()));
         }
 
-        // Verificar tipo MIME
         $tipoMime = $archivo->getClientMediaType();
+
+        // BLOQUEAR imágenes - deben usar ImagenesComponent
+        if (strpos($tipoMime, 'image/') === 0) {
+            throw new \Exception('Las imágenes deben procesarse con ImagenesComponent');
+        }
+
+        // Verificar tipo MIME
         if (!in_array($tipoMime, $this->tiposPermitidos[$tipo] ?? [])) {
             throw new \Exception("Tipo de archivo no permitido para {$tipo}. Tipo recibido: {$tipoMime}");
         }
 
         // Verificar tamaño
-        $tamañoMaximo = ($this->tamañosMaximos[$tipo] ?? 5) * 1024 * 1024; // Convertir MB a bytes
+        $tamañoMaximo = ($this->tamañosMaximos[$tipo] ?? 10) * 1024 * 1024; // Convertir MB a bytes
         if ($archivo->getSize() > $tamañoMaximo) {
-            $maxMB = $this->tamañosMaximos[$tipo] ?? 5;
+            $maxMB = $this->tamañosMaximos[$tipo] ?? 10;
             throw new \Exception("El archivo excede el tamaño máximo permitido de {$maxMB}MB");
         }
 
@@ -125,6 +142,59 @@ class ArchivosComponent extends Component
         if ($archivo->getSize() === 0) {
             throw new \Exception('El archivo está vacío');
         }
+    }
+
+    /**
+     * Determina automáticamente el tipo de archivo según su MIME type
+     *
+     * @param string $mimeType Tipo MIME del archivo
+     * @return string Tipo determinado ('documento', 'archivo', 'geoespacial')
+     */
+    public function determinarTipoArchivo(string $mimeType): string
+    {
+        $mapeo = [
+            'application/pdf' => 'documento',
+            'application/msword' => 'documento',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'documento',
+            'application/vnd.ms-excel' => 'documento',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'documento',
+            'application/vnd.ms-powerpoint' => 'documento',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'documento',
+            'application/json' => 'geoespacial', // Prioritario para GeoJSON
+            'application/xml' => 'geoespacial',   // Prioritario para KML
+            'text/csv' => 'archivo',
+            'application/zip' => 'archivo',
+            'application/rar' => 'archivo'
+        ];
+
+        // Para text/plain, revisar contexto (por defecto será archivo)
+        if ($mimeType === 'text/plain') {
+            return 'archivo'; // Podría ser WKT geoespacial, pero por defecto archivo
+        }
+
+        return $mapeo[$mimeType] ?? 'archivo';
+    }
+
+    /**
+     * Procesa automáticamente un archivo detectando su tipo
+     *
+     * @param object $archivo Archivo subido
+     * @param int $entidadId ID de la entidad
+     * @return array Resultado del procesamiento
+     * @throws \Exception Si es una imagen o hay errores
+     */
+    public function procesarArchivoAutomatico($archivo, int $entidadId): array
+    {
+        $mimeType = $archivo->getClientMediaType();
+
+        // Bloqueo temprano de imágenes
+        if (strpos($mimeType, 'image/') === 0) {
+            throw new \Exception('Las imágenes deben procesarse con ImagenesComponent');
+        }
+
+        $tipoDetectado = $this->determinarTipoArchivo($mimeType);
+
+        return $this->subirArchivo($archivo, $entidadId, $tipoDetectado);
     }
 
     /**
@@ -255,5 +325,15 @@ class ArchivosComponent extends Component
     public function obtenerTiposPermitidos(string $tipo): array
     {
         return $this->tiposPermitidos[$tipo] ?? [];
+    }
+
+    /**
+     * Obtiene todos los tipos de archivo soportados
+     *
+     * @return array Array con todos los tipos soportados
+     */
+    public function obtenerTiposSoportados(): array
+    {
+        return array_keys($this->tiposPermitidos);
     }
 }
